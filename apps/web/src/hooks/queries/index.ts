@@ -6,6 +6,7 @@ export {
   usePlaysStats,
   useLocationStats,
   useLocationPeople,
+  useLocationOverrides,
   usePlaysByDayOfWeek,
   usePlaysByHourOfDay,
   usePlatformStats,

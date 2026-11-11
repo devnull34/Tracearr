@@ -11,6 +11,7 @@ import {
   type Settings,
   type BackupScheduleType,
   type EmailBrandingSettings,
+  type LocationOverride,
 } from '@tracearr/shared';
 import { db } from '../db/client.js';
 import { settings } from '../db/schema.js';
@@ -93,6 +94,8 @@ const INTERNAL_DEFAULTS = {
   identityBackfillAutoAttempts: 0 as number,
   // The passes version the last finished identity walk ran; below the code's, the next sync tail queues one.
   identityPassesVersion: 0 as number,
+  // Manual overrides for MaxMind locations
+  locationOverrides: [] as LocationOverride[],
 };
 
 type InternalSettings = typeof INTERNAL_DEFAULTS;

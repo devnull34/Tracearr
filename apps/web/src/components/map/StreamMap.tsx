@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type {
-  ExpressionSpecification,
-  GeoJSONSource,
-  LngLat,
-  Map as MLMap,
-  MapLayerMouseEvent,
-  StyleSpecification,
+import {
+  Marker,
+  type ExpressionSpecification,
+  type GeoJSONSource,
+  type LngLat,
+  type Map as MLMap,
+  type MapLayerMouseEvent,
+  type StyleSpecification,
 } from 'maplibre-gl';
 import type { FeatureCollection } from 'geojson';
 import { useTranslation } from 'react-i18next';
@@ -63,6 +64,12 @@ interface StreamMapProps {
   onViewChange?: (bounds: ViewBounds) => void;
   /** Each change fits the map to every point. */
   fitAllSignal?: number;
+  pinEdit?: {
+    active: boolean;
+    lat: number | null;
+    lon: number | null;
+    onPinChange: (coords: { lat: number; lon: number }) => void;
+  };
 }
 
 interface TooltipState {
@@ -133,6 +140,7 @@ export function StreamMap({
   onSelectArea,
   onViewChange,
   fitAllSignal = 0,
+  pinEdit,
 }: StreamMapProps) {
   const { t } = useTranslation(['pages']);
   const { accentHue } = useTheme();
@@ -148,6 +156,9 @@ export function StreamMap({
   const zoomRef = useRef(2);
   const shownRef = useRef<readonly Shown[]>([]);
   const highlightRef = useRef({ hovered: NONE, selected: NONE });
+  const pinEditRef = useRef(pinEdit);
+  pinEditRef.current = pinEdit;
+  const markerRef = useRef<Marker | null>(null);
 
   const hasData = locations.length > 0;
   const perServer = Boolean(isMultiServer && serverColorMap);
@@ -424,6 +435,7 @@ export function StreamMap({
       onHover?.(null);
     };
     const click = (e: MapLayerMouseEvent) => {
+      if (pinEditRef.current?.active) return;
       const hit = featureMembers(e);
       if (!hit) return;
       if (hit.members.length === 1) {
@@ -455,6 +467,73 @@ export function StreamMap({
     };
   }, [map, byKey, onHover, onSelect, onSelectArea]);
 
+  useEffect(() => {
+    if (!map || !pinEdit?.active) {
+      if (markerRef.current) {
+        markerRef.current.remove();
+        markerRef.current = null;
+      }
+      return;
+    }
+
+    const currentCoords =
+      pinEdit.lat !== null && pinEdit.lon !== null && !isNaN(pinEdit.lat) && !isNaN(pinEdit.lon)
+        ? ([pinEdit.lon, pinEdit.lat] as [number, number])
+        : ([map.getCenter().lng, map.getCenter().lat] as [number, number]);
+
+    if (!markerRef.current) {
+      const marker = new Marker({ draggable: true, color: '#f59e0b' })
+        .setLngLat(currentCoords)
+        .addTo(map);
+
+      marker.on('drag', () => {
+        const { lng, lat } = marker.getLngLat();
+        pinEditRef.current?.onPinChange({ lat, lon: lng });
+      });
+
+      marker.on('dragend', () => {
+        const { lng, lat } = marker.getLngLat();
+        pinEditRef.current?.onPinChange({ lat, lon: lng });
+      });
+
+      markerRef.current = marker;
+
+      if (pinEdit.lat !== null && pinEdit.lon !== null) {
+        map.flyTo({ center: currentCoords, zoom: Math.max(map.getZoom(), 8) });
+      }
+    } else {
+      const currentPos = markerRef.current.getLngLat();
+      if (
+        Math.abs(currentPos.lat - currentCoords[1]) > 0.00001 ||
+        Math.abs(currentPos.lng - currentCoords[0]) > 0.00001
+      ) {
+        markerRef.current.setLngLat(currentCoords);
+      }
+    }
+
+    const handleMapClick = (e: MapLayerMouseEvent) => {
+      if (markerRef.current) {
+        markerRef.current.setLngLat(e.lngLat);
+        pinEditRef.current?.onPinChange({ lat: e.lngLat.lat, lon: e.lngLat.lng });
+      }
+    };
+
+    map.on('click', handleMapClick);
+
+    return () => {
+      map.off('click', handleMapClick);
+    };
+  }, [map, pinEdit?.active, pinEdit?.lat, pinEdit?.lon]);
+
+  useEffect(() => {
+    return () => {
+      if (markerRef.current) {
+        markerRef.current.remove();
+        markerRef.current = null;
+      }
+    };
+  }, []);
+
   const tooltipPlaces = tooltip?.members.flatMap((k) => byKey.get(k) ?? []) ?? [];
   const tooltipLocation = tooltipPlaces[0];
 
@@ -465,6 +544,13 @@ export function StreamMap({
   return (
     <div className={cn('relative h-full w-full', className)}>
       <div ref={containerRef} className="h-full w-full" />
+
+      {pinEdit?.active && (
+        <div className="bg-background/95 text-foreground pointer-events-none absolute top-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full border border-amber-500/50 px-4 py-1.5 text-xs font-medium shadow-md backdrop-blur">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-amber-500" />
+          <span>{t('map.pinHint')}</span>
+        </div>
+      )}
 
       {tooltip && tooltipLocation && (
         <div

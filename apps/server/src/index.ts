@@ -871,6 +871,7 @@ async function initializeServices(app: FastifyInstance) {
   await geoipService.initialize(GEOIP_DB_PATH);
   if (geoipService.hasDatabase()) {
     app.log.info('GeoIP database loaded');
+    await geoipService.loadOverrides();
   } else {
     app.log.warn('GeoIP database not available - location features disabled');
   }

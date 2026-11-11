@@ -850,6 +850,38 @@ export interface LocationPeopleResponse {
   data: LocationStats[];
 }
 
+export interface LocationOverride {
+  key: string; // The location key: JSON.stringify([country, region, city, isLocal])
+  lat: number;
+  lon: number;
+  city?: string | null;
+  region?: string | null;
+  country?: string | null;
+  countryCode?: string | null;
+  isLocal?: boolean;
+  pinned?: boolean;
+  updatedAt?: string;
+}
+
+export interface ExternalPublicLocation {
+  lat: number;
+  lon: number;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  countryCode: string | null;
+  publicIp: string;
+}
+
+export interface LocationOverridesResponse {
+  overrides: LocationOverride[];
+}
+
+export interface AutoDetectLocationResponse {
+  success: boolean;
+  location: ExternalPublicLocation | null;
+}
+
 export interface LibraryStats {
   movies: number;
   shows: number;

@@ -16,7 +16,12 @@
  * - Graceful handling of missing coordinates
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../settings.js', () => ({
+  getSetting: vi.fn(),
+  setSetting: vi.fn(),
+}));
 
 // Import ACTUAL production class and types - not local duplicates
 import { GeoIPService, type GeoLocation } from '../geoip.js';
@@ -550,6 +555,35 @@ describe('GeoIPService', () => {
 
       expect(result.city).toBeNull();
       expect(result.country).toBe('Local Network');
+    });
+
+    it('should return Local Network placeholder for private IP', () => {
+      const result = service.lookup('192.168.1.1');
+      expect(result.country).toBe('Local Network');
+      expect(result.lat).toBeNull();
+      expect(result.lon).toBeNull();
+    });
+
+    it('should apply and remove overrides', async () => {
+      const overrideKey = JSON.stringify(['United States', 'California', 'Los Angeles', false]);
+      await service.setOverride({
+        key: overrideKey,
+        lat: 34.0522,
+        lon: -118.2437,
+        city: 'LA Downtown',
+        region: 'California',
+        country: 'United States',
+        countryCode: 'US',
+        isLocal: false,
+        pinned: true,
+      });
+
+      expect(service.getOverrides()).toHaveLength(1);
+      expect(service.getOverride(overrideKey)?.city).toBe('LA Downtown');
+
+      await service.removeOverride(overrideKey);
+      expect(service.getOverrides()).toHaveLength(0);
+      expect(service.getOverride(overrideKey)).toBeUndefined();
     });
   });
 });

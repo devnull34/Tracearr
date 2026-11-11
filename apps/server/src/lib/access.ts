@@ -8,9 +8,9 @@ const appStatements = {
   violations: ['read'],
   devices: ['read'],
   bandwidth: ['read'],
-  locations: ['read'],
+  locations: ['read', 'write'],
   requests: ['read', 'write'],
-  map: ['read'],
+  map: ['read', 'write'],
   media: ['read'],
   // Library analytics: per-title watch counts, binges, completion, storage and quality reports
   insights: ['read'],

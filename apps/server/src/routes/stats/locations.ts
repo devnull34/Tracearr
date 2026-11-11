@@ -17,14 +17,20 @@ import {
   type LocationStats,
   type LocationStatsQueryInput,
   type LocationUserInfo,
+  type LocationOverride,
   locationPeopleQuerySchema,
   locationStatsQuerySchema,
+  saveLocationOverrideSchema,
+  deleteLocationOverrideSchema,
 } from '@tracearr/shared';
 import { db } from '../../db/client.js';
 import { resolveServerIds, buildMultiServerFragment } from '../../utils/serverFiltering.js';
 import { scopeSessionsRaw } from '../../lib/scope.js';
 import { representativeAccountOrderSql } from '../../utils/representativeAccount.js';
 import { localSessionSql } from '../../db/sessions/rules.js';
+import { uncapDecompressionForTx } from '../../db/timescale.js';
+import { geoipService } from '../../services/geoip.js';
+import { firstIssueMessage } from '../../utils/zod.js';
 import { resolveDateRange } from './utils.js';
 
 /**
@@ -253,6 +259,9 @@ async function queryLocations(
     ORDER BY l.count DESC, l.loc_id
   `);
 
+  const overrides = geoipService.getOverrides();
+  const overrideMap = new Map(overrides.map((o) => [o.key, o]));
+
   return (
     result.rows as {
       city: string | null;
@@ -269,21 +278,41 @@ async function queryLocations(
       users: LocationUserInfo[] | null;
       servers: { serverId: string; count: number }[] | null;
     }[]
-  ).map((row) => ({
-    city: row.city,
-    region: row.region,
-    country: row.country,
-    lat: row.lat,
-    lon: row.lon,
-    isLocal: row.is_local,
-    count: row.count,
-    lastActivity: row.last_activity,
-    firstActivity: row.first_activity,
-    deviceCount: row.device_count,
-    users: row.users ?? [],
-    peopleCount: row.people_count,
-    servers: row.servers ?? [],
-  }));
+  ).map((row) => {
+    let lat = row.lat;
+    let lon = row.lon;
+    let city = row.city;
+    let region = row.region;
+    let country = row.country;
+
+    if (!row.is_local) {
+      const key = JSON.stringify([country, region, city, row.is_local]);
+      const override = overrideMap.get(key);
+      if (override) {
+        lat = override.lat;
+        lon = override.lon;
+        if (override.city !== undefined && override.city !== null) city = override.city;
+        if (override.region !== undefined && override.region !== null) region = override.region;
+        if (override.country !== undefined && override.country !== null) country = override.country;
+      }
+    }
+
+    return {
+      city,
+      region,
+      country,
+      lat,
+      lon,
+      isLocal: row.is_local,
+      count: row.count,
+      lastActivity: row.last_activity,
+      firstActivity: row.first_activity,
+      deviceCount: row.device_count,
+      users: row.users ?? [],
+      peopleCount: row.people_count,
+      servers: row.servers ?? [],
+    };
+  });
 }
 
 export const locationsRoutes: FastifyPluginAsync = async (app) => {
@@ -447,5 +476,96 @@ export const locationsRoutes: FastifyPluginAsync = async (app) => {
       data: await queryLocations(where(conditions), resolvedIds, { selection }),
     };
     return response;
+  });
+
+  const writeMap = { preHandler: [app.requirePermission('map', 'write')] };
+
+  /**
+   * GET /locations/overrides - Get all location overrides
+   */
+  app.get('/locations/overrides', readMap, async () => {
+    return {
+      overrides: geoipService.getOverrides(),
+    };
+  });
+
+  /**
+   * POST /locations/overrides - Save or update an override
+   */
+  app.post('/locations/overrides', writeMap, async (request, reply) => {
+    const parsed = saveLocationOverrideSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.badRequest(firstIssueMessage(parsed.error));
+    }
+    const data = parsed.data;
+    const override: LocationOverride = {
+      key: data.key,
+      lat: data.lat,
+      lon: data.lon,
+      city: data.city ?? null,
+      region: data.region ?? null,
+      country: data.country ?? null,
+      countryCode: data.countryCode ?? null,
+      isLocal: data.isLocal,
+      pinned: data.pinned ?? true,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await geoipService.setOverride(override);
+
+    try {
+      if (
+        !override.isLocal &&
+        override.country !== 'Local Network' &&
+        !data.key.includes('true]')
+      ) {
+        try {
+          const [origCountry, origRegion, origCity] = JSON.parse(data.key) as [
+            string | null,
+            string | null,
+            string | null,
+          ];
+          await db.transaction(async (tx) => {
+            await uncapDecompressionForTx(tx);
+            await tx.execute(sql`
+              UPDATE sessions
+              SET geo_lat = ${override.lat}::real,
+                  geo_lon = ${override.lon}::real,
+                  geo_city = COALESCE(${override.city}, geo_city),
+                  geo_region = COALESCE(${override.region}, geo_region),
+                  geo_country = COALESCE(${override.country}, geo_country)
+              WHERE geo_country IS NOT DISTINCT FROM ${origCountry}
+                AND geo_region IS NOT DISTINCT FROM ${origRegion}
+                AND geo_city IS NOT DISTINCT FROM ${origCity}
+                AND NOT (${localSessionSql('sessions')})
+            `);
+          });
+        } catch {}
+      }
+    } catch (err) {
+      request.log.warn({ err }, 'Could not update sessions table for location override');
+    }
+
+    return { success: true, override };
+  });
+
+  /**
+   * DELETE /locations/overrides - Remove an override
+   */
+  app.delete('/locations/overrides', writeMap, async (request, reply) => {
+    const parsed = deleteLocationOverrideSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.badRequest(firstIssueMessage(parsed.error));
+    }
+    await geoipService.removeOverride(parsed.data.key);
+    return { success: true };
+  });
+
+  /**
+   * POST /locations/overrides/auto-detect - Pull public-facing IP and detect coordinates
+   */
+  app.post('/locations/overrides/auto-detect', writeMap, async () => {
+    const location = await geoipService.fetchExternalPublicIpLocation();
+    return { success: true, location };
   });
 };

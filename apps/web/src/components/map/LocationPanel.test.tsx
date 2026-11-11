@@ -32,16 +32,52 @@ const history = vi.hoisted(() => ({
   useHistorySessions: vi.fn(),
 }));
 
+const serverLocationMock = vi.hoisted(() => ({
+  mutateAsync: vi.fn().mockResolvedValue({ entries: [], syncPending: false, syncQueued: true }),
+}));
+
 vi.mock('@/hooks/queries', () => ({
   useHistorySessions: (...args: unknown[]) => {
     history.useHistorySessions(...args);
     return history.result;
   },
+  useLocationOverrides: () => ({
+    data: { overrides: [] },
+    refetch: vi.fn(),
+  }),
+  useServerLocations: () => ({
+    data: { entries: [], syncPending: false },
+    refetch: vi.fn(),
+  }),
+  useUpdateServerLocations: () => ({
+    mutateAsync: serverLocationMock.mutateAsync,
+    isPending: false,
+  }),
 }));
 
 vi.mock('@/components/history/SessionDetailSheet', () => ({
   SessionDetailSheet: ({ session, open }: { session: SessionWithDetails | null; open: boolean }) =>
     open && session ? <div data-testid="session-sheet">{session.id}</div> : null,
+}));
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    stats: {
+      saveLocationOverride: vi.fn().mockResolvedValue({ success: true }),
+      deleteLocationOverride: vi.fn().mockResolvedValue({ success: true }),
+      autoDetectLocalNetworkLocation: vi.fn().mockResolvedValue({
+        success: true,
+        location: {
+          lat: 41.8781,
+          lon: -87.6298,
+          city: 'Chicago',
+          region: 'Illinois',
+          country: 'United States',
+        },
+      }),
+    },
+  },
+  imageProxyUrl: (u: string) => u,
 }));
 
 function person(username: string, count: number): LocationUserInfo {
@@ -216,5 +252,72 @@ describe('LocationPanel', () => {
     });
     expect(screen.getByText('Plex')).toBeInTheDocument();
     expect(screen.getByText('Jelly')).toBeInTheDocument();
+  });
+
+  it('renders the override section with coordinate inputs and calls onStartPinEdit', async () => {
+    const onStartPinEdit = vi.fn();
+    renderPanel({ onStartPinEdit });
+
+    expect(screen.getByText('map.override')).toBeInTheDocument();
+    expect(screen.getByLabelText('map.latitude')).toHaveValue('41.2');
+    expect(screen.getByLabelText('map.longitude')).toHaveValue('-111.9');
+
+    await userEvent.click(screen.getByRole('button', { name: /map\.editPin/ }));
+    expect(onStartPinEdit).toHaveBeenCalledWith({ lat: 41.2, lon: -111.9 });
+  });
+
+  it('saves an override when clicking save button', async () => {
+    const onOverrideChange = vi.fn();
+    renderPanel({ onOverrideChange });
+
+    const saveBtn = screen.getByRole('button', { name: /map\.saveOverride/ });
+    await userEvent.click(saveBtn);
+
+    expect(onOverrideChange).toHaveBeenCalled();
+  });
+
+  it('renders server location section for local stream and calls updateServerLocations on save', async () => {
+    const onOverrideChange = vi.fn();
+    const localLocation: LocationStats = {
+      city: null,
+      region: null,
+      country: 'Local Network',
+      isLocal: true,
+      lat: 37.2,
+      lon: -80.0,
+      count: 5,
+      peopleCount: 1,
+      servers: [{ serverId: 'server-1', count: 5 }],
+    };
+
+    render(
+      <MemoryRouter>
+        <LocationPanel
+          location={localLocation}
+          historyFilters={{}}
+          historyHref="/history"
+          onBack={vi.fn()}
+          onSelectPerson={vi.fn()}
+          serverNames={{ 'server-1': 'Hellcat' }}
+          onOverrideChange={onOverrideChange}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('Hellcat Location')).toBeInTheDocument();
+    const saveBtn = screen.getByRole('button', { name: /map\.saveLocation/ });
+    await userEvent.click(saveBtn);
+
+    expect(serverLocationMock.mutateAsync).toHaveBeenCalledWith({
+      id: 'server-1',
+      entries: [
+        expect.objectContaining({
+          lat: 37.2,
+          lon: -80.0,
+          effectiveFrom: null,
+        }),
+      ],
+    });
+    expect(onOverrideChange).toHaveBeenCalled();
   });
 });

@@ -102,6 +102,14 @@ export function useLocationPeople(
   });
 }
 
+export function useLocationOverrides() {
+  return useQuery({
+    queryKey: ['stats', 'locations', 'overrides'],
+    queryFn: () => api.stats.locationOverrides(),
+    staleTime: 1000 * 30,
+  });
+}
+
 export function usePlaysByDayOfWeek(
   timeRange?: StatsTimeRange,
   serverIds?: string[],

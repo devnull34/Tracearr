@@ -76,6 +76,10 @@ export type {
   LocationFilterOptions,
   LocationStatsResponse,
   LocationPeopleResponse,
+  LocationOverride,
+  ExternalPublicLocation,
+  LocationOverridesResponse,
+  AutoDetectLocationResponse,
   LibraryStats,
   DayOfWeekStats,
   HourOfDayStats,
@@ -573,6 +577,10 @@ export {
   userRangeStatsQuerySchema,
   locationStatsQuerySchema,
   locationPeopleQuerySchema,
+  saveLocationOverrideSchema,
+  type SaveLocationOverrideInput,
+  deleteLocationOverrideSchema,
+  type DeleteLocationOverrideInput,
   // Settings
   updateSettingsSchema,
   // Tailscale
