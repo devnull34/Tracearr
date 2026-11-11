@@ -34,6 +34,10 @@ import type {
   HourOfDayStats,
   LocationPeopleResponse,
   LocationStatsResponse,
+  LocationOverride,
+  LocalNetworkLocation,
+  LocationOverridesResponse,
+  SaveLocationOverrideInput,
   UserLocation,
   UserDevice,
   Settings,
@@ -1335,6 +1339,30 @@ class ApiClient {
         }
       }
       return this.request<LocationPeopleResponse>(`/stats/locations/people?${searchParams}`);
+    },
+    locationOverrides: async () => {
+      return this.request<LocationOverridesResponse>('/stats/locations/overrides');
+    },
+    saveLocationOverride: async (data: SaveLocationOverrideInput) => {
+      return this.request<{ success: boolean; override: LocationOverride }>(
+        '/stats/locations/overrides',
+        {
+          method: 'POST',
+          body: JSON.stringify(data),
+        }
+      );
+    },
+    deleteLocationOverride: async (key: string) => {
+      return this.request<{ success: boolean }>('/stats/locations/overrides', {
+        method: 'DELETE',
+        body: JSON.stringify({ key }),
+      });
+    },
+    autoDetectLocalNetworkLocation: async () => {
+      return this.request<{ success: boolean; location: LocalNetworkLocation | null }>(
+        '/stats/locations/overrides/auto-detect',
+        { method: 'POST' }
+      );
     },
     playsByDayOfWeek: async (
       timeRange?: StatsTimeRange,

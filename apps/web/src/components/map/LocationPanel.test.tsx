@@ -37,11 +37,35 @@ vi.mock('@/hooks/queries', () => ({
     history.useHistorySessions(...args);
     return history.result;
   },
+  useLocationOverrides: () => ({
+    data: { overrides: [], localNetwork: null },
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock('@/components/history/SessionDetailSheet', () => ({
   SessionDetailSheet: ({ session, open }: { session: SessionWithDetails | null; open: boolean }) =>
     open && session ? <div data-testid="session-sheet">{session.id}</div> : null,
+}));
+
+vi.mock('@/lib/api', () => ({
+  api: {
+    stats: {
+      saveLocationOverride: vi.fn().mockResolvedValue({ success: true }),
+      deleteLocationOverride: vi.fn().mockResolvedValue({ success: true }),
+      autoDetectLocalNetworkLocation: vi.fn().mockResolvedValue({
+        success: true,
+        location: {
+          lat: 41.8781,
+          lon: -87.6298,
+          city: 'Chicago',
+          region: 'Illinois',
+          country: 'United States',
+        },
+      }),
+    },
+  },
+  imageProxyUrl: (u: string) => u,
 }));
 
 function person(username: string, count: number): LocationUserInfo {
@@ -216,5 +240,27 @@ describe('LocationPanel', () => {
     });
     expect(screen.getByText('Plex')).toBeInTheDocument();
     expect(screen.getByText('Jelly')).toBeInTheDocument();
+  });
+
+  it('renders the override section with coordinate inputs and calls onStartPinEdit', async () => {
+    const onStartPinEdit = vi.fn();
+    renderPanel({ onStartPinEdit });
+
+    expect(screen.getByText('map.override')).toBeInTheDocument();
+    expect(screen.getByLabelText('map.latitude')).toHaveValue('41.2');
+    expect(screen.getByLabelText('map.longitude')).toHaveValue('-111.9');
+
+    await userEvent.click(screen.getByRole('button', { name: /map\.editPin/ }));
+    expect(onStartPinEdit).toHaveBeenCalledWith({ lat: 41.2, lon: -111.9 });
+  });
+
+  it('saves an override when clicking save button', async () => {
+    const onOverrideChange = vi.fn();
+    renderPanel({ onOverrideChange });
+
+    const saveBtn = screen.getByRole('button', { name: /map\.saveOverride/ });
+    await userEvent.click(saveBtn);
+
+    expect(onOverrideChange).toHaveBeenCalled();
   });
 });

@@ -3,7 +3,8 @@
  */
 
 import maxmind, { type CityResponse, type Reader } from 'maxmind';
-import { GEOIP_CONFIG } from '@tracearr/shared';
+import { GEOIP_CONFIG, type LocationOverride, type LocalNetworkLocation } from '@tracearr/shared';
+import { getSetting, setSetting } from './settings.js';
 
 export interface GeoLocation {
   city: string | null;
@@ -47,6 +48,8 @@ const LOCAL_LOCATION: GeoLocation = {
 export class GeoIPService {
   private reader: Reader<CityResponse> | null = null;
   private initialized = false;
+  private overrides = new Map<string, LocationOverride>();
+  private localNetworkLocation: LocalNetworkLocation | null = null;
 
   async initialize(dbPath: string): Promise<void> {
     try {
@@ -62,6 +65,143 @@ export class GeoIPService {
     }
   }
 
+  async loadOverrides(): Promise<void> {
+    try {
+      const overrides = await getSetting('locationOverrides');
+      if (Array.isArray(overrides)) {
+        this.overrides.clear();
+        for (const o of overrides) {
+          if (o && o.key) {
+            this.overrides.set(o.key, o);
+          }
+        }
+      }
+      const local = await getSetting('localNetworkLocation');
+      if (
+        local &&
+        typeof local === 'object' &&
+        typeof local.lat === 'number' &&
+        typeof local.lon === 'number'
+      ) {
+        this.localNetworkLocation = local;
+      } else {
+        // If unset, automatically pull using external public facing IP
+        await this.fetchExternalPublicIpLocation();
+      }
+    } catch (err) {
+      console.warn('Could not load location overrides:', err);
+    }
+  }
+
+  async fetchExternalPublicIpLocation(): Promise<LocalNetworkLocation | null> {
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      let ip: string | null = null;
+
+      try {
+        const res = await fetch('https://api.ipify.org?format=json', { signal: controller.signal });
+        if (res.ok) {
+          const data = (await res.json()) as { ip?: string };
+          if (data.ip) ip = data.ip;
+        }
+      } catch {
+        const res = await fetch('https://icanhazip.com', { signal: controller.signal });
+        if (res.ok) {
+          const text = (await res.text()).trim();
+          if (text) ip = text;
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+
+      if (!ip) return null;
+
+      if (!this.reader) return null;
+      const result = this.reader.get(ip);
+      if (!result?.location?.latitude || !result.location.longitude) return null;
+
+      const subdivisions = result.subdivisions;
+      const region =
+        subdivisions && subdivisions.length > 0 ? (subdivisions[0]?.names?.en ?? null) : null;
+
+      const loc: LocalNetworkLocation = {
+        lat: result.location.latitude,
+        lon: result.location.longitude,
+        city: result.city?.names?.en ?? null,
+        region,
+        country: result.country?.names?.en ?? 'Local Network',
+        countryCode: result.country?.iso_code ?? null,
+        autoDetected: true,
+        pinned: false,
+        publicIp: ip,
+        updatedAt: new Date().toISOString(),
+      };
+
+      this.localNetworkLocation = loc;
+      await setSetting('localNetworkLocation', loc);
+      return loc;
+    } catch (err) {
+      console.warn('Failed to fetch external public IP location:', err);
+      return null;
+    }
+  }
+
+  getLocalNetworkLocation(): LocalNetworkLocation | null {
+    return this.localNetworkLocation;
+  }
+
+  async setLocalNetworkLocation(loc: LocalNetworkLocation | null): Promise<void> {
+    this.localNetworkLocation = loc;
+    await setSetting('localNetworkLocation', loc);
+  }
+
+  getOverrides(): LocationOverride[] {
+    return Array.from(this.overrides.values());
+  }
+
+  getOverride(key: string): LocationOverride | undefined {
+    return this.overrides.get(key);
+  }
+
+  async setOverride(override: LocationOverride): Promise<void> {
+    this.overrides.set(override.key, override);
+    await setSetting('locationOverrides', Array.from(this.overrides.values()));
+
+    if (override.isLocal || override.country === 'Local Network') {
+      const loc: LocalNetworkLocation = {
+        lat: override.lat,
+        lon: override.lon,
+        city: override.city ?? null,
+        region: override.region ?? null,
+        country: override.country ?? 'Local Network',
+        countryCode: override.countryCode ?? null,
+        autoDetected: false,
+        pinned: true,
+        updatedAt: new Date().toISOString(),
+      };
+      this.localNetworkLocation = loc;
+      await setSetting('localNetworkLocation', loc);
+    }
+  }
+
+  async removeOverride(key: string): Promise<void> {
+    const existing = this.overrides.get(key);
+    this.overrides.delete(key);
+    await setSetting('locationOverrides', Array.from(this.overrides.values()));
+
+    if (
+      existing?.isLocal ||
+      existing?.country === 'Local Network' ||
+      key.includes('Local Network') ||
+      key.includes('true]')
+    ) {
+      this.localNetworkLocation = null;
+      await setSetting('localNetworkLocation', null);
+      await this.fetchExternalPublicIpLocation();
+    }
+  }
+
   isInitialized(): boolean {
     return this.initialized;
   }
@@ -71,8 +211,22 @@ export class GeoIPService {
   }
 
   lookup(ip: string): GeoLocation {
-    // Return "Local" for private/local network IPs
+    // Return local network location for private/local network IPs
     if (this.isPrivateIP(ip)) {
+      if (this.localNetworkLocation) {
+        return {
+          city: this.localNetworkLocation.city,
+          region: this.localNetworkLocation.region,
+          country: this.localNetworkLocation.country ?? 'Local Network',
+          countryCode: this.localNetworkLocation.countryCode ?? null,
+          continent: null,
+          postal: null,
+          lat: this.localNetworkLocation.lat,
+          lon: this.localNetworkLocation.lon,
+          asnNumber: null,
+          asnOrganization: null,
+        };
+      }
       return LOCAL_LOCATION;
     }
 
@@ -94,7 +248,7 @@ export class GeoIPService {
       const region =
         subdivisions && subdivisions.length > 0 ? (subdivisions[0]?.names?.en ?? null) : null;
 
-      return {
+      const loc: GeoLocation = {
         city: result.city?.names?.en ?? null,
         region,
         country: result.country?.names?.en ?? null,
@@ -106,6 +260,23 @@ export class GeoIPService {
         asnNumber: null,
         asnOrganization: null,
       };
+
+      // Check if this location has an active override
+      const key = JSON.stringify([loc.country, loc.region, loc.city, false]);
+      const override = this.overrides.get(key);
+      if (override) {
+        return {
+          ...loc,
+          lat: override.lat,
+          lon: override.lon,
+          city: override.city !== undefined ? override.city : loc.city,
+          region: override.region !== undefined ? override.region : loc.region,
+          country: override.country !== undefined ? override.country : loc.country,
+          countryCode: override.countryCode !== undefined ? override.countryCode : loc.countryCode,
+        };
+      }
+
+      return loc;
     } catch {
       return NULL_LOCATION;
     }

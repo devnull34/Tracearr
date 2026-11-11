@@ -187,6 +187,8 @@ export function Map() {
   const [selection, setSelection] = useState<Selection>(null);
   const [view, setView] = useState<ViewBounds | null>(null);
   const [fitAllSignal, setFitAllSignal] = useState(0);
+  const [pinEditing, setPinEditing] = useState(false);
+  const [pinCoords, setPinCoords] = useState<{ lat: number; lon: number } | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const hoveredKeys = useMemo(() => new Set(hovered), [hovered]);
   const hoverPlaces = useCallback(
@@ -201,11 +203,16 @@ export function Map() {
     (key: string | null) => hoverPlaces(key === null ? null : [key]),
     [hoverPlaces]
   );
-  const selectPlace = useCallback((key: string) => setSelection({ kind: 'place', key }), []);
-  const selectArea = useCallback(
-    (members: string[]) => setSelection({ kind: 'area', members }),
-    []
-  );
+  const selectPlace = useCallback((key: string) => {
+    setPinEditing(false);
+    setPinCoords(null);
+    setSelection({ kind: 'place', key });
+  }, []);
+  const selectArea = useCallback((members: string[]) => {
+    setPinEditing(false);
+    setPinCoords(null);
+    setSelection({ kind: 'area', members });
+  }, []);
 
   const selectedKeys = useMemo(
     () =>
@@ -272,12 +279,31 @@ export function Map() {
 
   const closePanel = () => {
     const [key] = selectedKeys;
+    setPinEditing(false);
+    setPinCoords(null);
     flushSync(() => setSelection(null));
     const rows = listRef.current?.querySelectorAll<HTMLElement>('[data-key]') ?? [];
     Array.from(rows)
       .find((row) => row.dataset.key === key)
       ?.focus();
   };
+
+  const handleStartPinEdit = useCallback((coords: { lat: number; lon: number }) => {
+    setPinCoords(coords);
+    setPinEditing(true);
+  }, []);
+
+  const handleStopPinEdit = useCallback(() => {
+    setPinEditing(false);
+  }, []);
+
+  const handlePinChange = useCallback((coords: { lat: number; lon: number }) => {
+    setPinCoords(coords);
+  }, []);
+
+  const handleOverrideChange = useCallback(() => {
+    void refetchLocations();
+  }, [refetchLocations]);
 
   const { startDate: rangeStart, endDate: rangeEnd } = rangeParams;
   const dateWindow = useMemo(
@@ -431,6 +457,12 @@ export function Map() {
                 onSelectArea={selectArea}
                 onViewChange={setView}
                 fitAllSignal={fitAllSignal}
+                pinEdit={{
+                  active: pinEditing,
+                  lat: pinCoords?.lat ?? selectedLocation?.lat ?? null,
+                  lon: pinCoords?.lon ?? selectedLocation?.lon ?? null,
+                  onPinChange: handlePinChange,
+                }}
               />
             </Suspense>
             {isMultiServer && hasData && filters.viewMode === 'circles' && (
@@ -474,6 +506,11 @@ export function Map() {
                   onBack={closePanel}
                   onSelectPerson={selectPerson}
                   serverNames={isMultiServer ? serverNameMap : undefined}
+                  pinEditing={pinEditing}
+                  onStartPinEdit={handleStartPinEdit}
+                  onStopPinEdit={handleStopPinEdit}
+                  pinCoords={pinCoords}
+                  onOverrideChange={handleOverrideChange}
                 />
               </div>
             )}

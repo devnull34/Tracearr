@@ -16,7 +16,12 @@
  * - Graceful handling of missing coordinates
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+vi.mock('../settings.js', () => ({
+  getSetting: vi.fn(),
+  setSetting: vi.fn(),
+}));
 
 // Import ACTUAL production class and types - not local duplicates
 import { GeoIPService, type GeoLocation } from '../geoip.js';
@@ -550,6 +555,48 @@ describe('GeoIPService', () => {
 
       expect(result.city).toBeNull();
       expect(result.country).toBe('Local Network');
+    });
+
+    it('should return pinned coordinates for private IP when local network is pinned', async () => {
+      await service.setLocalNetworkLocation({
+        lat: 41.8781,
+        lon: -87.6298,
+        city: 'Chicago',
+        region: 'Illinois',
+        country: 'United States',
+        countryCode: 'US',
+        autoDetected: false,
+        pinned: true,
+      });
+
+      const result = service.lookup('192.168.1.1');
+      expect(result.lat).toBe(41.8781);
+      expect(result.lon).toBe(-87.6298);
+      expect(result.city).toBe('Chicago');
+      expect(result.country).toBe('United States');
+      expect(result.countryCode).toBe('US');
+    });
+
+    it('should apply and remove overrides', async () => {
+      const overrideKey = JSON.stringify(['United States', 'California', 'Los Angeles', false]);
+      await service.setOverride({
+        key: overrideKey,
+        lat: 34.0522,
+        lon: -118.2437,
+        city: 'LA Downtown',
+        region: 'California',
+        country: 'United States',
+        countryCode: 'US',
+        isLocal: false,
+        pinned: true,
+      });
+
+      expect(service.getOverrides()).toHaveLength(1);
+      expect(service.getOverride(overrideKey)?.city).toBe('LA Downtown');
+
+      await service.removeOverride(overrideKey);
+      expect(service.getOverrides()).toHaveLength(0);
+      expect(service.getOverride(overrideKey)).toBeUndefined();
     });
   });
 });

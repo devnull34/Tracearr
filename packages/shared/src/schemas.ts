@@ -858,6 +858,26 @@ export const locationPeopleQuerySchema = locationStatsQuerySchema
     { message: 'Pass place, or west, south, east and north' }
   );
 
+export const saveLocationOverrideSchema = z.object({
+  key: z.string().min(1),
+  lat: z.number().min(-90).max(90),
+  lon: z.number().min(-180).max(180),
+  city: z.string().nullable().optional(),
+  region: z.string().nullable().optional(),
+  country: z.string().nullable().optional(),
+  countryCode: z.string().nullable().optional(),
+  isLocal: z.boolean().optional(),
+  pinned: z.boolean().optional(),
+});
+
+export type SaveLocationOverrideInput = z.infer<typeof saveLocationOverrideSchema>;
+
+export const deleteLocationOverrideSchema = z.object({
+  key: z.string().min(1),
+});
+
+export type DeleteLocationOverrideInput = z.infer<typeof deleteLocationOverrideSchema>;
+
 // ============================================================================
 // Webhook & Settings Schemas
 // ============================================================================

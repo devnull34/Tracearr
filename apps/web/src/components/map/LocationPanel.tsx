@@ -2,7 +2,15 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, ArrowUpRight } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowUpRight,
+  MapPin,
+  LocateFixed,
+  Trash2,
+  Check,
+  Crosshair,
+} from 'lucide-react';
 import {
   formatEpisodeLabel,
   POSTER_IMAGE_SIZE,
@@ -13,14 +21,17 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
 import { LocalBadge } from '@/components/sessions/LocalBadge';
 import { SessionDetailSheet } from '@/components/history/SessionDetailSheet';
 import { getAvatarUrl } from '@/components/users/utils';
-import { useHistorySessions, type HistoryFilters } from '@/hooks/queries';
-import { imageProxyUrl } from '@/lib/api';
+import { useHistorySessions, useLocationOverrides, type HistoryFilters } from '@/hooks/queries';
+import { api, imageProxyUrl } from '@/lib/api';
 import { getCountryName, getDeviceDisplayName, getMediaDisplay } from '@/lib/utils';
 import { FULL_DATE_TIME_OPTIONS, formatDate, formatDuration } from '@/lib/dateFormat';
-import { locationName } from './locationKey';
+import { locationKey, locationName } from './locationKey';
 
 const SESSION_ROW_HEIGHT = 56;
 
@@ -32,6 +43,11 @@ interface LocationPanelProps {
   onSelectPerson: (person: LocationUserInfo) => void;
   /** Server names by id; the per-server split shows when given and the location has several. */
   serverNames?: Record<string, string>;
+  pinEditing?: boolean;
+  onStartPinEdit?: (coords: { lat: number; lon: number }) => void;
+  onStopPinEdit?: () => void;
+  pinCoords?: { lat: number; lon: number } | null;
+  onOverrideChange?: () => void;
 }
 
 export function LocationPanel({
@@ -41,12 +57,130 @@ export function LocationPanel({
   onBack,
   onSelectPerson,
   serverNames,
+  pinEditing,
+  onStartPinEdit,
+  onStopPinEdit,
+  pinCoords,
+  onOverrideChange,
 }: LocationPanelProps) {
   const { t } = useTranslation(['pages', 'common', 'nav']);
   const panelRef = useRef<HTMLElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const headingId = useId();
   const [openSession, setOpenSession] = useState<SessionWithDetails | null>(null);
+
+  const { data: overridesData, refetch: refetchOverrides } = useLocationOverrides();
+  const overrides = overridesData?.overrides ?? [];
+  const localNetwork = overridesData?.localNetwork ?? null;
+
+  const currentKey = locationKey(location);
+  const isLocal = location.isLocal || location.country === 'Local Network';
+  const existingOverride = overrides.find((o) => o.key === currentKey);
+
+  const isPinned = isLocal ? Boolean(localNetwork?.pinned) : Boolean(existingOverride);
+  const isAuto = isLocal && Boolean(localNetwork?.autoDetected) && !localNetwork?.pinned;
+
+  const [lat, setLat] = useState<string>(() =>
+    location.lat !== null ? String(location.lat) : localNetwork?.lat ? String(localNetwork.lat) : ''
+  );
+  const [lon, setLon] = useState<string>(() =>
+    location.lon !== null ? String(location.lon) : localNetwork?.lon ? String(localNetwork.lon) : ''
+  );
+  const [city, setCity] = useState<string>(() => location.city ?? '');
+  const [region, setRegion] = useState<string>(() => location.region ?? '');
+  const [country, setCountry] = useState<string>(() => location.country ?? '');
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDetecting, setIsDetecting] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  useEffect(() => {
+    if (location.lat !== null) setLat(String(location.lat));
+    else if (localNetwork?.lat) setLat(String(localNetwork.lat));
+    if (location.lon !== null) setLon(String(location.lon));
+    else if (localNetwork?.lon) setLon(String(localNetwork.lon));
+    setCity(location.city ?? '');
+    setRegion(location.region ?? '');
+    setCountry(location.country ?? '');
+  }, [location, localNetwork]);
+
+  useEffect(() => {
+    if (pinCoords && pinEditing) {
+      setLat(String(Number(pinCoords.lat.toFixed(5))));
+      setLon(String(Number(pinCoords.lon.toFixed(5))));
+    }
+  }, [pinCoords, pinEditing]);
+
+  const handleStartPin = () => {
+    const latNum = parseFloat(lat);
+    const lonNum = parseFloat(lon);
+    onStartPinEdit?.({
+      lat: !isNaN(latNum) ? latNum : (location.lat ?? 0),
+      lon: !isNaN(lonNum) ? lonNum : (location.lon ?? 0),
+    });
+  };
+
+  const handleAutoDetect = async () => {
+    setIsDetecting(true);
+    try {
+      const res = await api.stats.autoDetectLocalNetworkLocation();
+      if (res.success && res.location) {
+        setLat(String(res.location.lat));
+        setLon(String(res.location.lon));
+        if (res.location.city) setCity(res.location.city);
+        if (res.location.region) setRegion(res.location.region);
+        if (res.location.country) setCountry(res.location.country);
+        await refetchOverrides();
+        onOverrideChange?.();
+      }
+    } catch (err) {
+      console.error('Failed to auto-detect location:', err);
+    } finally {
+      setIsDetecting(false);
+    }
+  };
+
+  const handleSave = async () => {
+    const latNum = parseFloat(lat);
+    const lonNum = parseFloat(lon);
+    if (isNaN(latNum) || isNaN(lonNum)) return;
+    setIsSaving(true);
+    try {
+      await api.stats.saveLocationOverride({
+        key: currentKey,
+        lat: latNum,
+        lon: lonNum,
+        city: city.trim() || null,
+        region: region.trim() || null,
+        country: country.trim() || null,
+        isLocal,
+        pinned: true,
+      });
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2500);
+      onStopPinEdit?.();
+      await refetchOverrides();
+      onOverrideChange?.();
+    } catch (err) {
+      console.error('Failed to save location override:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleRemove = async () => {
+    setIsSaving(true);
+    try {
+      await api.stats.deleteLocationOverride(currentKey);
+      onStopPinEdit?.();
+      await refetchOverrides();
+      onOverrideChange?.();
+    } catch (err) {
+      console.error('Failed to remove location override:', err);
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   useEffect(() => {
     headingRef.current?.focus();
@@ -128,6 +262,162 @@ export function LocationPanel({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pt-3.5">
+          {/* Override Section */}
+          <section className="bg-card/60 space-y-3 rounded-lg border p-3 shadow-xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-xs font-semibold">
+                <MapPin className="text-primary h-3.5 w-3.5" />
+                <span>{t('map.override')}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                {isLocal ? (
+                  isPinned ? (
+                    <Badge
+                      variant="default"
+                      className="bg-emerald-600 text-[10px] hover:bg-emerald-600"
+                    >
+                      {t('map.pinned')}
+                    </Badge>
+                  ) : isAuto ? (
+                    <Badge variant="secondary" className="text-[10px]">
+                      {t('map.autoDetected')}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px]">
+                      {t('map.noMapPosition')}
+                    </Badge>
+                  )
+                ) : isPinned ? (
+                  <Badge variant="default" className="bg-amber-600 text-[10px] hover:bg-amber-600">
+                    {t('map.overrideActive')}
+                  </Badge>
+                ) : (
+                  <Badge variant="secondary" className="text-[10px]">
+                    {t('map.maxmindDefault')}
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            {isLocal && isAuto && localNetwork?.publicIp && (
+              <div className="text-muted-foreground text-[11px]">
+                IP: <span className="font-mono">{localNetwork.publicIp}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="space-y-1">
+                <Label htmlFor="loc-lat" className="text-muted-foreground text-[11px]">
+                  {t('map.latitude')}
+                </Label>
+                <Input
+                  id="loc-lat"
+                  value={lat}
+                  onChange={(e) => setLat(e.target.value)}
+                  placeholder="e.g. 40.7128"
+                  className="h-7 font-mono text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="loc-lon" className="text-muted-foreground text-[11px]">
+                  {t('map.longitude')}
+                </Label>
+                <Input
+                  id="loc-lon"
+                  value={lon}
+                  onChange={(e) => setLon(e.target.value)}
+                  placeholder="e.g. -74.0060"
+                  className="h-7 font-mono text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5 text-xs">
+              <div className="space-y-1">
+                <Label htmlFor="loc-city" className="text-muted-foreground text-[11px]">
+                  {t('map.city')}
+                </Label>
+                <Input
+                  id="loc-city"
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="loc-region" className="text-muted-foreground text-[11px]">
+                  {t('map.region')}
+                </Label>
+                <Input
+                  id="loc-region"
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="loc-country" className="text-muted-foreground text-[11px]">
+                  {t('map.country')}
+                </Label>
+                <Input
+                  id="loc-country"
+                  value={country}
+                  onChange={(e) => setCountry(e.target.value)}
+                  className="h-7 text-xs"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <Button
+                variant={pinEditing ? 'default' : 'outline'}
+                size="sm"
+                className="h-7 gap-1 text-xs"
+                onClick={pinEditing ? onStopPinEdit : handleStartPin}
+              >
+                <Crosshair className="h-3 w-3" />
+                {pinEditing ? t('map.stopPin') : t('map.editPin')}
+              </Button>
+
+              {isLocal && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 text-xs"
+                  disabled={isDetecting}
+                  onClick={handleAutoDetect}
+                >
+                  <LocateFixed className="h-3 w-3" />
+                  {isDetecting ? t('map.pullingPublicIp') : t('map.autoDetect')}
+                </Button>
+              )}
+
+              <Button
+                variant="default"
+                size="sm"
+                className="ml-auto h-7 gap-1 text-xs"
+                disabled={isSaving || !lat || !lon}
+                onClick={handleSave}
+              >
+                <Check className="h-3 w-3" />
+                {saveSuccess ? t('map.overrideSaved') : t('map.saveOverride')}
+              </Button>
+
+              {(isPinned || existingOverride) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-destructive hover:text-destructive h-7 gap-1 text-xs"
+                  disabled={isSaving}
+                  onClick={handleRemove}
+                >
+                  <Trash2 className="h-3 w-3" />
+                  {t('map.removeOverride')}
+                </Button>
+              )}
+            </div>
+          </section>
+
           {people && people.length > 0 && (
             <section className="max-h-[40%] shrink-0 scrollbar-thin overflow-auto">
               <SectionHeading>{t('nav:people')}</SectionHeading>
