@@ -28,6 +28,7 @@ import { resolveServerIds, buildMultiServerFragment } from '../../utils/serverFi
 import { scopeSessionsRaw } from '../../lib/scope.js';
 import { representativeAccountOrderSql } from '../../utils/representativeAccount.js';
 import { localSessionSql } from '../../db/sessions/rules.js';
+import { uncapDecompressionForTx } from '../../db/timescale.js';
 import { geoipService } from '../../services/geoip.js';
 import { firstIssueMessage } from '../../utils/zod.js';
 import { resolveDateRange } from './utils.js';
@@ -258,7 +259,6 @@ async function queryLocations(
     ORDER BY l.count DESC, l.loc_id
   `);
 
-  const localNetwork = geoipService.getLocalNetworkLocation();
   const overrides = geoipService.getOverrides();
   const overrideMap = new Map(overrides.map((o) => [o.key, o]));
 
@@ -285,13 +285,7 @@ async function queryLocations(
     let region = row.region;
     let country = row.country;
 
-    if (row.is_local && localNetwork) {
-      lat = localNetwork.lat;
-      lon = localNetwork.lon;
-      if (localNetwork.city) city = localNetwork.city;
-      if (localNetwork.region) region = localNetwork.region;
-      if (localNetwork.country) country = localNetwork.country;
-    } else {
+    if (!row.is_local) {
       const key = JSON.stringify([country, region, city, row.is_local]);
       const override = overrideMap.get(key);
       if (override) {
@@ -487,12 +481,11 @@ export const locationsRoutes: FastifyPluginAsync = async (app) => {
   const writeMap = { preHandler: [app.requirePermission('map', 'write')] };
 
   /**
-   * GET /locations/overrides - Get all location overrides and local network pin status
+   * GET /locations/overrides - Get all location overrides
    */
   app.get('/locations/overrides', readMap, async () => {
     return {
       overrides: geoipService.getOverrides(),
-      localNetwork: geoipService.getLocalNetworkLocation(),
     };
   });
 
@@ -521,34 +514,32 @@ export const locationsRoutes: FastifyPluginAsync = async (app) => {
     await geoipService.setOverride(override);
 
     try {
-      if (override.isLocal || override.country === 'Local Network' || data.key.includes('true]')) {
-        await db.execute(sql`
-          UPDATE sessions
-          SET geo_lat = ${override.lat}::real,
-              geo_lon = ${override.lon}::real,
-              geo_city = COALESCE(${override.city}, geo_city),
-              geo_region = COALESCE(${override.region}, geo_region)
-          WHERE ${localSessionSql('sessions')}
-        `);
-      } else {
+      if (
+        !override.isLocal &&
+        override.country !== 'Local Network' &&
+        !data.key.includes('true]')
+      ) {
         try {
           const [origCountry, origRegion, origCity] = JSON.parse(data.key) as [
             string | null,
             string | null,
             string | null,
           ];
-          await db.execute(sql`
-            UPDATE sessions
-            SET geo_lat = ${override.lat}::real,
-                geo_lon = ${override.lon}::real,
-                geo_city = COALESCE(${override.city}, geo_city),
-                geo_region = COALESCE(${override.region}, geo_region),
-                geo_country = COALESCE(${override.country}, geo_country)
-            WHERE geo_country IS NOT DISTINCT FROM ${origCountry}
-              AND geo_region IS NOT DISTINCT FROM ${origRegion}
-              AND geo_city IS NOT DISTINCT FROM ${origCity}
-              AND NOT (${localSessionSql('sessions')})
-          `);
+          await db.transaction(async (tx) => {
+            await uncapDecompressionForTx(tx);
+            await tx.execute(sql`
+              UPDATE sessions
+              SET geo_lat = ${override.lat}::real,
+                  geo_lon = ${override.lon}::real,
+                  geo_city = COALESCE(${override.city}, geo_city),
+                  geo_region = COALESCE(${override.region}, geo_region),
+                  geo_country = COALESCE(${override.country}, geo_country)
+              WHERE geo_country IS NOT DISTINCT FROM ${origCountry}
+                AND geo_region IS NOT DISTINCT FROM ${origRegion}
+                AND geo_city IS NOT DISTINCT FROM ${origCity}
+                AND NOT (${localSessionSql('sessions')})
+            `);
+          });
         } catch {}
       }
     } catch (err) {
@@ -571,7 +562,7 @@ export const locationsRoutes: FastifyPluginAsync = async (app) => {
   });
 
   /**
-   * POST /locations/overrides/auto-detect - Pull public-facing IP and detect local network location
+   * POST /locations/overrides/auto-detect - Pull public-facing IP and detect coordinates
    */
   app.post('/locations/overrides/auto-detect', writeMap, async () => {
     const location = await geoipService.fetchExternalPublicIpLocation();

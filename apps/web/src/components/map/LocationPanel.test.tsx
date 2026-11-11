@@ -32,14 +32,26 @@ const history = vi.hoisted(() => ({
   useHistorySessions: vi.fn(),
 }));
 
+const serverLocationMock = vi.hoisted(() => ({
+  mutateAsync: vi.fn().mockResolvedValue({ entries: [], syncPending: false, syncQueued: true }),
+}));
+
 vi.mock('@/hooks/queries', () => ({
   useHistorySessions: (...args: unknown[]) => {
     history.useHistorySessions(...args);
     return history.result;
   },
   useLocationOverrides: () => ({
-    data: { overrides: [], localNetwork: null },
+    data: { overrides: [] },
     refetch: vi.fn(),
+  }),
+  useServerLocations: () => ({
+    data: { entries: [], syncPending: false },
+    refetch: vi.fn(),
+  }),
+  useUpdateServerLocations: () => ({
+    mutateAsync: serverLocationMock.mutateAsync,
+    isPending: false,
   }),
 }));
 
@@ -261,6 +273,51 @@ describe('LocationPanel', () => {
     const saveBtn = screen.getByRole('button', { name: /map\.saveOverride/ });
     await userEvent.click(saveBtn);
 
+    expect(onOverrideChange).toHaveBeenCalled();
+  });
+
+  it('renders server location section for local stream and calls updateServerLocations on save', async () => {
+    const onOverrideChange = vi.fn();
+    const localLocation: LocationStats = {
+      city: null,
+      region: null,
+      country: 'Local Network',
+      isLocal: true,
+      lat: 37.2,
+      lon: -80.0,
+      count: 5,
+      peopleCount: 1,
+      servers: [{ serverId: 'server-1', count: 5 }],
+    };
+
+    render(
+      <MemoryRouter>
+        <LocationPanel
+          location={localLocation}
+          historyFilters={{}}
+          historyHref="/history"
+          onBack={vi.fn()}
+          onSelectPerson={vi.fn()}
+          serverNames={{ 'server-1': 'Hellcat' }}
+          onOverrideChange={onOverrideChange}
+        />
+      </MemoryRouter>
+    );
+
+    expect(screen.getByText('Hellcat Location')).toBeInTheDocument();
+    const saveBtn = screen.getByRole('button', { name: /map\.saveLocation/ });
+    await userEvent.click(saveBtn);
+
+    expect(serverLocationMock.mutateAsync).toHaveBeenCalledWith({
+      id: 'server-1',
+      entries: [
+        expect.objectContaining({
+          lat: 37.2,
+          lon: -80.0,
+          effectiveFrom: null,
+        }),
+      ],
+    });
     expect(onOverrideChange).toHaveBeenCalled();
   });
 });

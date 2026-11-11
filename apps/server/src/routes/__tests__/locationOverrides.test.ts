@@ -47,7 +47,6 @@ async function build(user: AuthUser) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(geoipService.getOverrides).mockReturnValue([]);
-  vi.mocked(geoipService.getLocalNetworkLocation).mockReturnValue(null);
   vi.mocked(geoipService.setOverride).mockResolvedValue(undefined);
   vi.mocked(geoipService.removeOverride).mockResolvedValue(undefined);
   vi.mocked(geoipService.fetchExternalPublicIpLocation).mockResolvedValue({
@@ -55,10 +54,8 @@ beforeEach(() => {
     lon: -87.6298,
     city: 'Chicago',
     region: 'Illinois',
-    country: 'Local Network',
+    country: 'US',
     countryCode: 'US',
-    autoDetected: true,
-    pinned: false,
     publicIp: '24.254.5.203',
   });
 });
@@ -69,7 +66,7 @@ afterEach(async () => {
 
 describe('Location Overrides Routes', () => {
   describe('GET /stats/locations/overrides', () => {
-    it('returns overrides and local network status for authenticated user with map:read', async () => {
+    it('returns overrides for authenticated user with map:read', async () => {
       await build(owner);
       vi.mocked(geoipService.getOverrides).mockReturnValue([
         {
@@ -82,22 +79,11 @@ describe('Location Overrides Routes', () => {
           countryCode: 'US',
         },
       ]);
-      vi.mocked(geoipService.getLocalNetworkLocation).mockReturnValue({
-        lat: 41.8781,
-        lon: -87.6298,
-        city: 'Chicago',
-        region: 'Illinois',
-        country: 'Local Network',
-        countryCode: 'US',
-        autoDetected: true,
-        pinned: false,
-      });
 
       const res = await app.inject({ method: 'GET', url: '/stats/locations/overrides' });
       expect(res.statusCode).toBe(200);
       const json = res.json();
       expect(json.overrides).toHaveLength(1);
-      expect(json.localNetwork?.autoDetected).toBe(true);
     });
   });
 

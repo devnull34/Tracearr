@@ -863,22 +863,23 @@ export interface LocationOverride {
   updatedAt?: string;
 }
 
-export interface LocalNetworkLocation {
+export interface ExternalPublicLocation {
   lat: number;
   lon: number;
   city: string | null;
   region: string | null;
   country: string | null;
   countryCode: string | null;
-  autoDetected: boolean;
-  pinned: boolean;
-  publicIp?: string | null;
-  updatedAt?: string;
+  publicIp: string;
 }
 
 export interface LocationOverridesResponse {
   overrides: LocationOverride[];
-  localNetwork: LocalNetworkLocation | null;
+}
+
+export interface AutoDetectLocationResponse {
+  success: boolean;
+  location: ExternalPublicLocation | null;
 }
 
 export interface LibraryStats {

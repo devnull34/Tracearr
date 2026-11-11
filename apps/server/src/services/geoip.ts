@@ -3,8 +3,10 @@
  */
 
 import maxmind, { type CityResponse, type Reader } from 'maxmind';
-import { GEOIP_CONFIG, type LocationOverride, type LocalNetworkLocation } from '@tracearr/shared';
+import { GEOIP_CONFIG, type LocationOverride, type ExternalPublicLocation } from '@tracearr/shared';
 import { getSetting, setSetting } from './settings.js';
+
+export type { ExternalPublicLocation };
 
 export interface GeoLocation {
   city: string | null;
@@ -49,7 +51,6 @@ export class GeoIPService {
   private reader: Reader<CityResponse> | null = null;
   private initialized = false;
   private overrides = new Map<string, LocationOverride>();
-  private localNetworkLocation: LocalNetworkLocation | null = null;
 
   async initialize(dbPath: string): Promise<void> {
     try {
@@ -76,24 +77,12 @@ export class GeoIPService {
           }
         }
       }
-      const local = await getSetting('localNetworkLocation');
-      if (
-        local &&
-        typeof local === 'object' &&
-        typeof local.lat === 'number' &&
-        typeof local.lon === 'number'
-      ) {
-        this.localNetworkLocation = local;
-      } else {
-        // If unset, automatically pull using external public facing IP
-        await this.fetchExternalPublicIpLocation();
-      }
     } catch (err) {
       console.warn('Could not load location overrides:', err);
     }
   }
 
-  async fetchExternalPublicIpLocation(): Promise<LocalNetworkLocation | null> {
+  async fetchExternalPublicIpLocation(): Promise<ExternalPublicLocation | null> {
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
@@ -125,35 +114,19 @@ export class GeoIPService {
       const region =
         subdivisions && subdivisions.length > 0 ? (subdivisions[0]?.names?.en ?? null) : null;
 
-      const loc: LocalNetworkLocation = {
+      return {
         lat: result.location.latitude,
         lon: result.location.longitude,
         city: result.city?.names?.en ?? null,
         region,
-        country: result.country?.names?.en ?? 'Local Network',
+        country: result.country?.names?.en ?? 'US',
         countryCode: result.country?.iso_code ?? null,
-        autoDetected: true,
-        pinned: false,
         publicIp: ip,
-        updatedAt: new Date().toISOString(),
       };
-
-      this.localNetworkLocation = loc;
-      await setSetting('localNetworkLocation', loc);
-      return loc;
     } catch (err) {
       console.warn('Failed to fetch external public IP location:', err);
       return null;
     }
-  }
-
-  getLocalNetworkLocation(): LocalNetworkLocation | null {
-    return this.localNetworkLocation;
-  }
-
-  async setLocalNetworkLocation(loc: LocalNetworkLocation | null): Promise<void> {
-    this.localNetworkLocation = loc;
-    await setSetting('localNetworkLocation', loc);
   }
 
   getOverrides(): LocationOverride[] {
@@ -167,39 +140,11 @@ export class GeoIPService {
   async setOverride(override: LocationOverride): Promise<void> {
     this.overrides.set(override.key, override);
     await setSetting('locationOverrides', Array.from(this.overrides.values()));
-
-    if (override.isLocal || override.country === 'Local Network') {
-      const loc: LocalNetworkLocation = {
-        lat: override.lat,
-        lon: override.lon,
-        city: override.city ?? null,
-        region: override.region ?? null,
-        country: override.country ?? 'Local Network',
-        countryCode: override.countryCode ?? null,
-        autoDetected: false,
-        pinned: true,
-        updatedAt: new Date().toISOString(),
-      };
-      this.localNetworkLocation = loc;
-      await setSetting('localNetworkLocation', loc);
-    }
   }
 
   async removeOverride(key: string): Promise<void> {
-    const existing = this.overrides.get(key);
     this.overrides.delete(key);
     await setSetting('locationOverrides', Array.from(this.overrides.values()));
-
-    if (
-      existing?.isLocal ||
-      existing?.country === 'Local Network' ||
-      key.includes('Local Network') ||
-      key.includes('true]')
-    ) {
-      this.localNetworkLocation = null;
-      await setSetting('localNetworkLocation', null);
-      await this.fetchExternalPublicIpLocation();
-    }
   }
 
   isInitialized(): boolean {
@@ -211,22 +156,8 @@ export class GeoIPService {
   }
 
   lookup(ip: string): GeoLocation {
-    // Return local network location for private/local network IPs
+    // Return local network placeholder for private/local network IPs
     if (this.isPrivateIP(ip)) {
-      if (this.localNetworkLocation) {
-        return {
-          city: this.localNetworkLocation.city,
-          region: this.localNetworkLocation.region,
-          country: this.localNetworkLocation.country ?? 'Local Network',
-          countryCode: this.localNetworkLocation.countryCode ?? null,
-          continent: null,
-          postal: null,
-          lat: this.localNetworkLocation.lat,
-          lon: this.localNetworkLocation.lon,
-          asnNumber: null,
-          asnOrganization: null,
-        };
-      }
       return LOCAL_LOCATION;
     }
 

@@ -27,11 +27,34 @@ import { Badge } from '@/components/ui/badge';
 import { LocalBadge } from '@/components/sessions/LocalBadge';
 import { SessionDetailSheet } from '@/components/history/SessionDetailSheet';
 import { getAvatarUrl } from '@/components/users/utils';
-import { useHistorySessions, useLocationOverrides, type HistoryFilters } from '@/hooks/queries';
+import {
+  useHistorySessions,
+  useLocationOverrides,
+  useServerLocations,
+  useUpdateServerLocations,
+  type HistoryFilters,
+} from '@/hooks/queries';
 import { api, imageProxyUrl } from '@/lib/api';
 import { getCountryName, getDeviceDisplayName, getMediaDisplay } from '@/lib/utils';
 import { FULL_DATE_TIME_OPTIONS, formatDate, formatDuration } from '@/lib/dateFormat';
 import { locationKey, locationName } from './locationKey';
+import { getCode as getCountryCodeFromName, getData as getCountryData } from 'country-list';
+
+function toCountryCode(input: string): string {
+  const trimmed = input.trim().toUpperCase();
+  if (/^[A-Z]{2}$/.test(trimmed)) return trimmed;
+  if (trimmed === 'USA') return 'US';
+  if (trimmed === 'UK') return 'GB';
+  const direct = getCountryCodeFromName(input.trim());
+  if (direct) return direct;
+  const lower = input.trim().toLowerCase();
+  if (lower === 'united states') return 'US';
+  const match = getCountryData().find((c) => {
+    const cleaned = c.name.toLowerCase().replace(/\s*\([Tt]he\)$/, '');
+    return cleaned === lower || cleaned.startsWith(lower);
+  });
+  return match?.code ?? 'US';
+}
 
 const SESSION_ROW_HEIGHT = 56;
 
@@ -69,40 +92,90 @@ export function LocationPanel({
   const headingId = useId();
   const [openSession, setOpenSession] = useState<SessionWithDetails | null>(null);
 
+  const isLocal = Boolean(location.isLocal || location.country === 'Local Network');
+  const servers = location.servers ?? [];
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  const activeServerId =
+    selectedServerId ??
+    servers[0]?.serverId ??
+    (serverNames ? (Object.keys(serverNames)[0] ?? null) : null);
+
+  // Server locations for local streams
+  const { data: serverLocationsData, refetch: refetchServerLocations } = useServerLocations(
+    isLocal ? (activeServerId ?? undefined) : undefined
+  );
+  const updateServerLocations = useUpdateServerLocations();
+
+  // Location overrides for remote streams (MaxMind overrides)
   const { data: overridesData, refetch: refetchOverrides } = useLocationOverrides();
   const overrides = overridesData?.overrides ?? [];
-  const localNetwork = overridesData?.localNetwork ?? null;
-
   const currentKey = locationKey(location);
-  const isLocal = location.isLocal || location.country === 'Local Network';
-  const existingOverride = overrides.find((o) => o.key === currentKey);
+  const existingOverride = !isLocal ? overrides.find((o) => o.key === currentKey) : undefined;
 
-  const isPinned = isLocal ? Boolean(localNetwork?.pinned) : Boolean(existingOverride);
-  const isAuto = isLocal && Boolean(localNetwork?.autoDetected) && !localNetwork?.pinned;
+  const serverLocationEntries = serverLocationsData?.entries ?? [];
+  const activeServerEntry = serverLocationEntries[0];
 
-  const [lat, setLat] = useState<string>(() =>
-    location.lat !== null ? String(location.lat) : localNetwork?.lat ? String(localNetwork.lat) : ''
-  );
-  const [lon, setLon] = useState<string>(() =>
-    location.lon !== null ? String(location.lon) : localNetwork?.lon ? String(localNetwork.lon) : ''
-  );
-  const [city, setCity] = useState<string>(() => location.city ?? '');
-  const [region, setRegion] = useState<string>(() => location.region ?? '');
-  const [country, setCountry] = useState<string>(() => location.country ?? '');
+  const isPinned = isLocal ? Boolean(serverLocationEntries.length > 0) : Boolean(existingOverride);
+
+  const [lat, setLat] = useState<string>(() => {
+    if (isLocal && activeServerEntry) return String(activeServerEntry.lat);
+    if (location.lat !== null) return String(location.lat);
+    return '';
+  });
+  const [lon, setLon] = useState<string>(() => {
+    if (isLocal && activeServerEntry) return String(activeServerEntry.lon);
+    if (location.lon !== null) return String(location.lon);
+    return '';
+  });
+  const [city, setCity] = useState<string>(() => {
+    if (isLocal && activeServerEntry) return activeServerEntry.city ?? '';
+    return location.city ?? '';
+  });
+  const [region, setRegion] = useState<string>(() => {
+    if (isLocal && activeServerEntry) return activeServerEntry.region ?? '';
+    return location.region ?? '';
+  });
+  const [country, setCountry] = useState<string>(() => {
+    if (isLocal && activeServerEntry) return activeServerEntry.country ?? '';
+    return location.country ?? '';
+  });
 
   const [isSaving, setIsSaving] = useState(false);
   const [isDetecting, setIsDetecting] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const [detectedIp, setDetectedIp] = useState<string | null>(null);
 
   useEffect(() => {
-    if (location.lat !== null) setLat(String(location.lat));
-    else if (localNetwork?.lat) setLat(String(localNetwork.lat));
-    if (location.lon !== null) setLon(String(location.lon));
-    else if (localNetwork?.lon) setLon(String(localNetwork.lon));
-    setCity(location.city ?? '');
-    setRegion(location.region ?? '');
-    setCountry(location.country ?? '');
-  }, [location, localNetwork]);
+    if (isLocal) {
+      if (activeServerEntry) {
+        setLat(String(activeServerEntry.lat));
+        setLon(String(activeServerEntry.lon));
+        setCity(activeServerEntry.city ?? '');
+        setRegion(activeServerEntry.region ?? '');
+        setCountry(activeServerEntry.country ?? '');
+      } else {
+        if (location.lat !== null) setLat(String(location.lat));
+        if (location.lon !== null) setLon(String(location.lon));
+        setCity(location.city ?? '');
+        setRegion(location.region ?? '');
+        setCountry(location.country ?? '');
+      }
+    } else {
+      if (existingOverride) {
+        setLat(String(existingOverride.lat));
+        setLon(String(existingOverride.lon));
+        setCity(existingOverride.city ?? '');
+        setRegion(existingOverride.region ?? '');
+        setCountry(existingOverride.country ?? '');
+      } else {
+        if (location.lat !== null) setLat(String(location.lat));
+        if (location.lon !== null) setLon(String(location.lon));
+        setCity(location.city ?? '');
+        setRegion(location.region ?? '');
+        setCountry(location.country ?? '');
+      }
+    }
+  }, [isLocal, activeServerEntry, location, existingOverride]);
 
   useEffect(() => {
     if (pinCoords && pinEditing) {
@@ -129,9 +202,9 @@ export function LocationPanel({
         setLon(String(res.location.lon));
         if (res.location.city) setCity(res.location.city);
         if (res.location.region) setRegion(res.location.region);
-        if (res.location.country) setCountry(res.location.country);
-        await refetchOverrides();
-        onOverrideChange?.();
+        if (res.location.countryCode) setCountry(res.location.countryCode);
+        else if (res.location.country) setCountry(res.location.country);
+        if (res.location.publicIp) setDetectedIp(res.location.publicIp);
       }
     } catch (err) {
       console.error('Failed to auto-detect location:', err);
@@ -146,23 +219,42 @@ export function LocationPanel({
     if (isNaN(latNum) || isNaN(lonNum)) return;
     setIsSaving(true);
     try {
-      await api.stats.saveLocationOverride({
-        key: currentKey,
-        lat: latNum,
-        lon: lonNum,
-        city: city.trim() || null,
-        region: region.trim() || null,
-        country: country.trim() || null,
-        isLocal,
-        pinned: true,
-      });
+      if (isLocal) {
+        if (!activeServerId) return;
+        const countryCode = toCountryCode(country);
+        await updateServerLocations.mutateAsync({
+          id: activeServerId,
+          entries: [
+            {
+              effectiveFrom: null,
+              lat: latNum,
+              lon: lonNum,
+              city: city.trim() || null,
+              region: region.trim() || null,
+              country: countryCode,
+            },
+          ],
+        });
+        await refetchServerLocations();
+      } else {
+        await api.stats.saveLocationOverride({
+          key: currentKey,
+          lat: latNum,
+          lon: lonNum,
+          city: city.trim() || null,
+          region: region.trim() || null,
+          country: country.trim() || null,
+          isLocal: false,
+          pinned: true,
+        });
+        await refetchOverrides();
+      }
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 2500);
       onStopPinEdit?.();
-      await refetchOverrides();
       onOverrideChange?.();
     } catch (err) {
-      console.error('Failed to save location override:', err);
+      console.error('Failed to save location:', err);
     } finally {
       setIsSaving(false);
     }
@@ -171,12 +263,21 @@ export function LocationPanel({
   const handleRemove = async () => {
     setIsSaving(true);
     try {
-      await api.stats.deleteLocationOverride(currentKey);
+      if (isLocal) {
+        if (!activeServerId) return;
+        await updateServerLocations.mutateAsync({
+          id: activeServerId,
+          entries: [],
+        });
+        await refetchServerLocations();
+      } else {
+        await api.stats.deleteLocationOverride(currentKey);
+        await refetchOverrides();
+      }
       onStopPinEdit?.();
-      await refetchOverrides();
       onOverrideChange?.();
     } catch (err) {
-      console.error('Failed to remove location override:', err);
+      console.error('Failed to remove location:', err);
     } finally {
       setIsSaving(false);
     }
@@ -201,7 +302,6 @@ export function LocationPanel({
   const place = [location.region, getCountryName(location.country)]
     .filter((part) => part && part !== name)
     .join(' · ');
-  const servers = location.servers ?? [];
   const people = location.users;
 
   return (
@@ -262,12 +362,18 @@ export function LocationPanel({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 px-4 pt-3.5">
-          {/* Override Section */}
+          {/* Location Setting / Override Section */}
           <section className="bg-card/60 space-y-3 rounded-lg border p-3 shadow-xs">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-1.5 text-xs font-semibold">
                 <MapPin className="text-primary h-3.5 w-3.5" />
-                <span>{t('map.override')}</span>
+                <span>
+                  {isLocal
+                    ? serverNames && activeServerId && serverNames[activeServerId]
+                      ? `${serverNames[activeServerId]} Location`
+                      : t('map.serverLocation')
+                    : t('map.override')}
+                </span>
               </div>
               <div className="flex items-center gap-1">
                 {isLocal ? (
@@ -277,10 +383,6 @@ export function LocationPanel({
                       className="bg-emerald-600 text-[10px] hover:bg-emerald-600"
                     >
                       {t('map.pinned')}
-                    </Badge>
-                  ) : isAuto ? (
-                    <Badge variant="secondary" className="text-[10px]">
-                      {t('map.autoDetected')}
                     </Badge>
                   ) : (
                     <Badge variant="outline" className="text-[10px]">
@@ -299,9 +401,29 @@ export function LocationPanel({
               </div>
             </div>
 
-            {isLocal && isAuto && localNetwork?.publicIp && (
+            {isLocal && servers.length > 1 && (
+              <div className="space-y-1">
+                <Label htmlFor="loc-server-select" className="text-muted-foreground text-[11px]">
+                  {t('map.selectServer')}
+                </Label>
+                <select
+                  id="loc-server-select"
+                  value={activeServerId ?? ''}
+                  onChange={(e) => setSelectedServerId(e.target.value)}
+                  className="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus:ring-ring flex h-7 w-full rounded-md border px-2 py-1 text-xs shadow-xs focus:ring-1 focus:outline-none"
+                >
+                  {servers.map((s) => (
+                    <option key={s.serverId} value={s.serverId}>
+                      {serverNames?.[s.serverId] ?? s.serverId} ({s.count} streams)
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {isLocal && detectedIp && (
               <div className="text-muted-foreground text-[11px]">
-                IP: <span className="font-mono">{localNetwork.publicIp}</span>
+                Detected Public IP: <span className="font-mono">{detectedIp}</span>
               </div>
             )}
 
@@ -396,23 +518,29 @@ export function LocationPanel({
                 variant="default"
                 size="sm"
                 className="ml-auto h-7 gap-1 text-xs"
-                disabled={isSaving || !lat || !lon}
+                disabled={isSaving || !lat || !lon || (isLocal && !activeServerId)}
                 onClick={handleSave}
               >
                 <Check className="h-3 w-3" />
-                {saveSuccess ? t('map.overrideSaved') : t('map.saveOverride')}
+                {saveSuccess
+                  ? isLocal
+                    ? t('map.locationSaved')
+                    : t('map.overrideSaved')
+                  : isLocal
+                    ? t('map.saveLocation')
+                    : t('map.saveOverride')}
               </Button>
 
-              {(isPinned || existingOverride) && (
+              {isPinned && (
                 <Button
                   variant="ghost"
                   size="sm"
                   className="text-destructive hover:text-destructive h-7 gap-1 text-xs"
-                  disabled={isSaving}
+                  disabled={isSaving || (isLocal && !activeServerId)}
                   onClick={handleRemove}
                 >
                   <Trash2 className="h-3 w-3" />
-                  {t('map.removeOverride')}
+                  {isLocal ? t('map.removeLocation') : t('map.removeOverride')}
                 </Button>
               )}
             </div>

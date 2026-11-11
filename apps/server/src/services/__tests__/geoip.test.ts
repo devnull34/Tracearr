@@ -557,24 +557,11 @@ describe('GeoIPService', () => {
       expect(result.country).toBe('Local Network');
     });
 
-    it('should return pinned coordinates for private IP when local network is pinned', async () => {
-      await service.setLocalNetworkLocation({
-        lat: 41.8781,
-        lon: -87.6298,
-        city: 'Chicago',
-        region: 'Illinois',
-        country: 'United States',
-        countryCode: 'US',
-        autoDetected: false,
-        pinned: true,
-      });
-
+    it('should return Local Network placeholder for private IP', () => {
       const result = service.lookup('192.168.1.1');
-      expect(result.lat).toBe(41.8781);
-      expect(result.lon).toBe(-87.6298);
-      expect(result.city).toBe('Chicago');
-      expect(result.country).toBe('United States');
-      expect(result.countryCode).toBe('US');
+      expect(result.country).toBe('Local Network');
+      expect(result.lat).toBeNull();
+      expect(result.lon).toBeNull();
     });
 
     it('should apply and remove overrides', async () => {

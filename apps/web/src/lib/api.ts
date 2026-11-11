@@ -35,7 +35,7 @@ import type {
   LocationPeopleResponse,
   LocationStatsResponse,
   LocationOverride,
-  LocalNetworkLocation,
+  ExternalPublicLocation,
   LocationOverridesResponse,
   SaveLocationOverrideInput,
   UserLocation,
@@ -1359,7 +1359,7 @@ class ApiClient {
       });
     },
     autoDetectLocalNetworkLocation: async () => {
-      return this.request<{ success: boolean; location: LocalNetworkLocation | null }>(
+      return this.request<{ success: boolean; location: ExternalPublicLocation | null }>(
         '/stats/locations/overrides/auto-detect',
         { method: 'POST' }
       );
